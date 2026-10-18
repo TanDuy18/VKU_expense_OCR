@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'data/db.dart';
@@ -8,12 +9,39 @@ import 'theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  store.load(); // đọc SQLite khi khởi động
+  store.load(); // mobile: đọc SQLite, web: đọc dữ liệu mẫu trong bộ nhớ
   runApp(MaterialApp(
     title: 'VKU Expense OCR',
     debugShowCheckedModeBanner: false,
     theme: buildTheme(),
     home: const Shell(),
+    builder: (context, child) {
+      if (!kIsWeb) return child!; // mobile thật thì không bọc
+
+      return Container(
+        color: const Color(0xFF0B1230), // nền xanh navy đậm
+        alignment: Alignment.center,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Khung cao tối đa 880, nhưng không vượt quá chiều cao cửa sổ
+            final h = (constraints.maxHeight - 48).clamp(400.0, 880.0);
+            return Container(
+              width: 390,
+              height: h,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(44),
+                border: Border.all(color: const Color(0xFF1F2A44), width: 10),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black54, blurRadius: 40, offset: Offset(0, 20)),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: child,
+            );
+          },
+        ),
+      );
+    },
   ));
 }
 

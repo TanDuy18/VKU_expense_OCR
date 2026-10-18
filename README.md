@@ -21,6 +21,7 @@
 
 - 📦 **APK Download:** [https://github.com/TanDuy18/VKU_expense_OCR/releases/tag/v1.0.0]
 - 💻 **GitHub Repository:** [https://github.com/tanduy18/vku_expense_ocr]
+-    **Demo app: ** [https://withered-hat-34e2.tanduy18-it.workers.dev/]
 
 ---
 
