@@ -1,87 +1,197 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:image_picker/image_picker.dart';
 import '../data/db.dart';
 import '../models/expense.dart';
 import '../ocr/ocr_service.dart';
 import '../parser/receipt_parser.dart';
+import '../theme.dart';
 
-// Màn hình xác nhận: OCR (hoặc văn bản mẫu) → regex điền sẵn → sửa → lưu SQLite
+/// Màn xác nhận: OCR (hoặc văn bản mẫu) → ReceiptParser → người dùng sửa lại → lưu SQLite.
+/// Truyền `image` khi chụp/chọn ảnh, hoặc `demoText` khi bấm mẫu hóa đơn.
 class ReviewScreen extends StatefulWidget {
-  final String? imagePath; // ảnh chụp/chọn
-  final String? demoText;  // văn bản mẫu, bỏ qua bước OCR
-  const ReviewScreen({super.key, this.imagePath, this.demoText});
+  final XFile? image;
+  final String? demoText;
+  const ReviewScreen({super.key, this.image, this.demoText});
+
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
 }
 
 class _ReviewScreenState extends State<ReviewScreen> {
-  final _ocr = OcrService();
-  final _merchant = TextEditingController(), _amount = TextEditingController();
+  final _rawCtrl = TextEditingController();
+  final _merchantCtrl = TextEditingController();
+  final _amountCtrl = TextEditingController();
   DateTime _date = DateTime.now();
-  String _cat = categories.first.name, _raw = '';
+  String _category = categories.first.name;
+  bool _income = false;
   bool _loading = true;
+  String? _error;
 
   @override
-  void initState() { super.initState(); _run(); }
+  void initState() {
+    super.initState();
+    _process();
+  }
 
-  Future<void> _run() async {
-    try {
-      _raw = widget.demoText ?? await _ocr.read(widget.imagePath!);
-      final p = ReceiptParser.parse(_raw);
-      _merchant.text = p.merchant ?? '';
-      _amount.text = p.amount?.toString() ?? '';
-      _date = p.date ?? _date;
-      _cat = ReceiptParser.guessCategory(_raw);
-    } catch (e) {
-      _raw = 'Không đọc được ảnh, hãy nhập tay. ($e)';
+  @override
+  void dispose() {
+    _rawCtrl.dispose();
+    _merchantCtrl.dispose();
+    _amountCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _process() async {
+    var text = widget.demoText ?? '';
+    if (widget.image != null) {
+      if (kIsWeb) {
+        _error = 'Web không chạy được ML Kit. Hãy dán văn bản hóa đơn vào ô bên dưới rồi bấm "Phân tích lại".';
+      } else {
+        final ocr = OcrService();
+        try {
+          text = await ocr.read(widget.image!.path);
+        } catch (e) {
+          _error = 'Không đọc được ảnh ($e). Bạn có thể nhập tay bên dưới.';
+        } finally {
+          ocr.dispose();
+        }
+      }
     }
-    if (mounted) setState(() => _loading = false);
+    if (!mounted) return;
+    _rawCtrl.text = text;
+    _applyParse();
+    setState(() => _loading = false);
+  }
+
+  // Đọc lại văn bản trong ô OCR và điền vào các trường bên dưới.
+  void _applyParse() {
+    final text = _rawCtrl.text;
+    final r = ReceiptParser.parse(text);
+    _merchantCtrl.text = r.merchant ?? '';
+    _amountCtrl.text = r.amount?.toString() ?? '';
+    _date = r.date ?? DateTime.now();
+    _income = r.isIncome;
+    _category = ReceiptParser.guessCategory(text);
+  }
+
+  Future<void> _pickDate() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
+    );
+    if (d != null) setState(() => _date = d);
   }
 
   Future<void> _save() async {
-    final amt = int.tryParse(_amount.text.replaceAll(RegExp(r'[.,\s]'), ''));
-    if (amt == null || amt <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nhập số tiền lớn hơn 0')));
+    final messenger = ScaffoldMessenger.of(context);
+    final nav = Navigator.of(context);
+    final amount = int.tryParse(_amountCtrl.text.replaceAll(RegExp(r'[^\d]'), ''));
+    if (amount == null || amount <= 0) {
+      messenger.showSnackBar(const SnackBar(content: Text('Hãy nhập số tiền hợp lệ')));
       return;
     }
-    String? saved;
-    if (widget.imagePath != null) {
-      // Chép ảnh vào thư mục riêng của app để xem lại sau này
-      final dir = await getApplicationDocumentsDirectory();
-      saved = (await File(widget.imagePath!).copy('${dir.path}/rcpt_${DateTime.now().millisecondsSinceEpoch}.jpg')).path;
-    }
-    await store.add(Expense(merchant: _merchant.text.trim(), amount: amt, date: _date, category: _cat, imagePath: saved));
-    if (mounted) Navigator.popUntil(context, (r) => r.isFirst); // về trang chủ
+    await store.add(Expense(
+      merchant: _merchantCtrl.text.trim(),
+      amount: amount,
+      date: _date,
+      category: _category,
+      imagePath: kIsWeb ? null : widget.image?.path,
+    ));
+    nav.popUntil((r) => r.isFirst); // về Trang chủ
+    messenger.showSnackBar(const SnackBar(content: Text('Đã lưu giao dịch')));
   }
 
   @override
-  void dispose() { _ocr.dispose(); _merchant.dispose(); _amount.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Kiểm tra hóa đơn')),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(padding: const EdgeInsets.all(16), children: [
-                if (widget.imagePath != null) ...[
-                  ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.file(File(widget.imagePath!), height: 170, fit: BoxFit.cover)),
-                  const SizedBox(height: 12),
-                ],
-                TextField(controller: _merchant, decoration: const InputDecoration(labelText: 'Cửa hàng', border: OutlineInputBorder())),
-                const SizedBox(height: 10),
-                TextField(controller: _amount, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Số tiền (đ)', border: OutlineInputBorder())),
-                ListTile(contentPadding: EdgeInsets.zero, title: Text('Ngày: ${_date.toIso8601String().substring(0, 10)}'), trailing: const Icon(Icons.calendar_today),
-                  onTap: () async {
-                    final d = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2020), lastDate: DateTime.now());
-                    if (d != null) setState(() => _date = d);
-                  }),
-                DropdownButtonFormField<String>(value: _cat, decoration: const InputDecoration(labelText: 'Danh mục', border: OutlineInputBorder()),
-                  items: [for (final c in categories) DropdownMenuItem(value: c.name, child: Text('${c.emoji} ${c.name}'))],
-                  onChanged: (v) => setState(() => _cat = v ?? _cat)),
-                ExpansionTile(title: const Text('Văn bản OCR gốc'), children: [Padding(padding: const EdgeInsets.all(8), child: Text(_raw))]),
-                const SizedBox(height: 8),
-                FilledButton(onPressed: _save, style: FilledButton.styleFrom(padding: const EdgeInsets.all(16)), child: const Text('Lưu giao dịch')),
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Xác nhận hóa đơn')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(padding: const EdgeInsets.all(16), children: [
+              if (!kIsWeb && widget.image != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.file(File(widget.image!.path), height: 160, fit: BoxFit.cover),
+                  ),
+                ),
+              if (_error != null) _banner(_error!, const Color(0xFFFFF3CD)),
+              if (_income)
+                _banner('Có vẻ đây là tin nhắn tiền vào. App chỉ theo dõi chi tiêu, hãy kiểm tra lại trước khi lưu.',
+                    const Color(0xFFFFE3E3)),
+              TextField(
+                controller: _amountCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppColors.ink),
+                decoration: const InputDecoration(labelText: 'Số tiền (VND)', suffixText: 'đ'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _merchantCtrl,
+                decoration: const InputDecoration(labelText: 'Cửa hàng / nội dung'),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Ngày'),
+                subtitle: Text(_date.toIso8601String().substring(0, 10)),
+                trailing: const Icon(Icons.calendar_today_outlined),
+                onTap: _pickDate,
+              ),
+              const SizedBox(height: 8),
+              const Text('Danh mục', style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.ink)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 4, children: [
+                for (final c in categories)
+                  ChoiceChip(
+                    label: Text('${c.emoji} ${c.short}'),
+                    selected: _category == c.name,
+                    onSelected: (_) => setState(() => _category = c.name),
+                  ),
               ]),
+              const SizedBox(height: 12),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                initiallyExpanded: kIsWeb,
+                title: const Text('Văn bản OCR', style: TextStyle(fontWeight: FontWeight.w700)),
+                children: [
+                  TextField(
+                    controller: _rawCtrl,
+                    maxLines: 8,
+                    decoration: const InputDecoration(border: OutlineInputBorder()),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => setState(_applyParse),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Phân tích lại'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: _save,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: Text(_income ? 'Vẫn lưu' : 'Lưu giao dịch'),
+              ),
+            ]),
+    );
+  }
+
+  Widget _banner(String text, Color bg) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
+        child: Text(text, style: const TextStyle(fontSize: 13, color: AppColors.ink)),
       );
 }

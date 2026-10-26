@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../data/demo_receipts.dart';
@@ -8,9 +9,9 @@ class ScanScreen extends StatelessWidget {
   const ScanScreen({super.key});
 
   Future<void> _pick(BuildContext context, ImageSource src) async {
-    final x = await ImagePicker().pickImage(source: src, maxWidth: 1600); // thu nhỏ để OCR nhanh
+    final x = await ImagePicker().pickImage(source: src, maxWidth: 1600, imageQuality: 85); // thu nhỏ để OCR nhanh
     if (x == null || !context.mounted) return;
-    Navigator.push(context, MaterialPageRoute(builder: (_) => ReviewScreen(imagePath: x.path)));
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ReviewScreen(image: x)));
   }
 
   @override
@@ -20,11 +21,19 @@ class ScanScreen extends StatelessWidget {
           Container(
             height: 180,
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.blue, width: 2)),
-            child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.receipt_long, size: 52, color: Colors.blueGrey),
-              SizedBox(height: 8),
-              Text('Đặt hóa đơn vào trong khung', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-              Text('Nhận dạng văn bản trên máy, không cần Internet', style: TextStyle(fontSize: 13, color: Colors.black54)),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.receipt_long, size: 52, color: Colors.blueGrey),
+              const SizedBox(height: 8),
+              const Text('Đặt hóa đơn vào trong khung', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  kIsWeb ? 'Web: ML Kit chỉ chạy trên điện thoại. Hãy dán văn bản ở bước sau hoặc dùng mẫu bên dưới'
+                         : 'Nhận dạng văn bản trên máy, không cần Internet',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+              ),
             ]),
           ),
           const SizedBox(height: 16),
@@ -51,7 +60,6 @@ class ScanScreen extends StatelessWidget {
                 title: Text('${d.title} (${vnd(d.amount)})', style: const TextStyle(fontWeight: FontWeight.w700)),
                 subtitle: const Text('Bấm để quét nhận dạng thử'),
                 trailing: const Icon(Icons.arrow_forward),
-                // Chạy văn bản mẫu qua parser rồi mở màn hình xác nhận
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ReviewScreen(demoText: d.ocrText))),
               ),
             ),
